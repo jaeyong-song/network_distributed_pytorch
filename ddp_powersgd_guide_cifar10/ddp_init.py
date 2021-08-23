@@ -17,6 +17,7 @@ import torchvision.models as models
 from torch.autograd import Variable
 
 import partition_helper as part_help
+from reducer import PowerSGDReducer
 
 config = dict (
     seed=714,
@@ -29,8 +30,10 @@ config = dict (
 
     learning_rate = 0.001,
     momentum = 0.9,
+    nesterov = False,
     training_epochs = 100,
     batch_size = 32,
+    reducer_rank = 4,
 )
 
 
@@ -108,21 +111,69 @@ def run_task():
     model = models.resnet50(pretrained=True).to(device)
 
     criterion = nn.CrossEntropyLoss().to(deivce)
-    optimizer = optim.SGD(model.parameters(), lr=config["learning_rate"], momentum=config["momentum"])
+    optimizer = optim.SGD(model.parameters(), lr=config["learning_rate"], momentum=config["momentum"], nesterov=config["nesterov"])
 
     num_batches = ceil(len(train_set.dataset) / float(bsz))
+
+    # Reducer for PowerSGD
+    reducer = PowerSGDReducer(random_seed=config["seed"], device=device, n_power_iterations=0, reuse_query=True, rank=config["reducer_rank"])
+
+    bits_communicated = 0
+
+    """
+    PowerSGD
+    Algorithm 2: Distributed Error-feedback SGD with Momentum
+    """
+    # (Algo 2: line 4) initialize memory e
+    state = [parameter for parameter in model.parameters()]
+    memories = [torch.zeros_like(param) for param in state]
+    # Make Temp Buffer for intermediate calculation
+    send_buffers = [torch.zeros_like(param) for param in state]
+    # Need Initialization for Momentum Calculation
+    momenta = [torch.empty_like(param) for param in state]
+
+    # (Algo 2: line 5) for each iterate t = 0, ... do
     for epoch in range(config["training_epochs"]):
         print(">>>>> Rank ", dist.get_rank(), ", epoch ", epoch, " Started...")
         epoch_loss = 0.0
-        for data, target in train_set:
+        for i, data, target in enumerate(train_set):
             data, target = Variable(data.to(device)), Variable(target.to(device))
             optimizer.zero_grad()
             output = model(data)
             loss = criterion(output, target)
             epoch_loss += loss.item()
+            
+            # (Algo 2: line 6) Compute a SG g
             loss.backward()
-            average_gradients(model)
-            optimizer.step()
+            grads = [parameter.grad for parameter in model.parameters()]
+            
+            # !!!!! PowerSGD Logic Should be here !!!!!
+            
+            # (Algo 2: line 7) delta_w = g + e (save to send_buffers)
+            for g, e, send_buffer in zip(grads, memories, send_buffers):
+                send_buffer.data[:] = g + e
+            
+            # (Algo 2: line 8-11) Compress/Decompress and Memorize Local Errors
+            # Implemented in Reducer
+            bits_communicated += reducer.reduce(send_buffers, grads, memories)
+            # Calculated output is in grads
+
+            # [CF] Use Common Momentum Equation
+            # (Algo 2: line 12) m <- \lambda * m + decompressed_gradient(delta)
+            for g, momentum in zip(grads, momenta):
+                if epoch == 0 and i == 0:
+                    momentum.data = g.clone().detach()
+                else:
+                    momentum.mul_(config["momentum"]).add_(g)
+                # (Algo 2: line 13) (grad + momentum)
+                g.data[:] += momentum
+            
+            # Use Custom Step
+            # [Do not use] optimizer.step()
+            # (Algo 2: line 13) x <- x - \gamma*(grad + momentum)
+            for param, g in zip(model.parameters(), grads):
+                param.data.add_(g, alpha=-config["learning_rate"])
+
         print("     Rank ", dist.get_rank(), ", epoch ", epoch, ": ", epoch_loss / num_batches)
         print(">>>>> Rank ", dist.get_rank(), ", epoch ", epoch, " Finished...\n")
 

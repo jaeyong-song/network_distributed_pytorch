@@ -111,6 +111,7 @@ class PowerSGDReducer(Reducer):
                 self._set_random(q)
         
         """
+        PowerSGD
         Algorithm 1: Rank-r PowerSGD Compression
         
         All Compression/Decompression is done in Reducer
@@ -146,6 +147,7 @@ class PowerSGDReducer(Reducer):
         self.q_memory.data[:] /= self.n_workers
 
         """
+        PowerSGD
         Algorithm 2: Distributed Error-feedback SGD with Momentum
 
         Only Local Error is return by Reducer!
