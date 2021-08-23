@@ -107,7 +107,7 @@ def run_task():
 
     model = models.resnet50(pretrained=True).to(device)
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss().to(deivce)
     optimizer = optim.SGD(model.parameters(), lr=config["learning_rate"], momentum=config["momentum"])
 
     num_batches = ceil(len(train_set.dataset) / float(bsz))
