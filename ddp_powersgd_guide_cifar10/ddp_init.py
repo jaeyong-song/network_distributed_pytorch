@@ -23,7 +23,7 @@ config = dict (
     seed=714,
     rank=0, # should be updated by caller
     cuda_rank=0,
-    n_workers=8,
+    n_workers=4,
     distributed_init_file=None, #(Kind of Socket)
     output_dir="./output.tmp", # you must create this directory
     distributed_backend="nccl", # gloo is more compatible recently
@@ -110,8 +110,10 @@ def run_task():
 
     model = models.resnet50(pretrained=True).to(device)
 
-    criterion = nn.CrossEntropyLoss().to(deivce)
-    optimizer = optim.SGD(model.parameters(), lr=config["learning_rate"], momentum=config["momentum"], nesterov=config["nesterov"])
+    criterion = nn.CrossEntropyLoss().to(device)
+    # Do not use momentum or nesterov...
+    # It is self implemented below
+    optimizer = optim.SGD(model.parameters(), lr=config["learning_rate"])
 
     num_batches = ceil(len(train_set.dataset) / float(bsz))
 
@@ -136,7 +138,8 @@ def run_task():
     for epoch in range(config["training_epochs"]):
         print(">>>>> Rank ", dist.get_rank(), ", epoch ", epoch, " Started...")
         epoch_loss = 0.0
-        for i, data, target in enumerate(train_set):
+        i = 0
+        for data, target in train_set:
             data, target = Variable(data.to(device)), Variable(target.to(device))
             optimizer.zero_grad()
             output = model(data)
@@ -173,6 +176,9 @@ def run_task():
             # (Algo 2: line 13) x <- x - \gamma*(grad + momentum)
             for param, g in zip(model.parameters(), grads):
                 param.data.add_(g, alpha=-config["learning_rate"])
+            
+            # for small batch counting
+            i += 1
 
         print("     Rank ", dist.get_rank(), ", epoch ", epoch, ": ", epoch_loss / num_batches)
         print(">>>>> Rank ", dist.get_rank(), ", epoch ", epoch, " Finished...\n")
