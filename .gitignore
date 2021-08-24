@@ -3,6 +3,8 @@
 *_data/
 MRPC/
 *.zip
+*/aclImdb/
+*/*.gz
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
